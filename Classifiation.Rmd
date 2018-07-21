@@ -1,57 +1,72 @@
 ---
-title: "Machine Learnign Project"
+title: "Machine Learning Project"
 output: html_notebook
 ---
 
 This assignment is based on the work done by Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013
 
 Read more: http://groupware.les.inf.puc-rio.br/har#ixzz5KiZnE8Ua 
+
+##Load Necessary Packages
 ```{r message = FALSE, warning=FALSE}
 suppressPackageStartupMessages(library(caret))
 suppressPackageStartupMessages(library(mboost))
 suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(parallel))
+suppressPackageStartupMessages(library(doParallel))
 ```
 
+##Load Data
 ```{r}
-training <-as_tibble(read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"))
-testing <-as_tibble(read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"))
-
+#Load data if cached  
+  if(file.exists("data/training.csv")){
+    training <- as_tibble(read.csv(file = "data/training.csv"))
+  }
+  # Download source data
+  if(!dir.exists("data")) dir.create("data")
+  if(!file.exists("data/training.csv")) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "data/training.csv")
+    training <- as_tibble(read.csv(file = "data/training.csv"))
+  }
+  if(file.exists("data/testing.csv")){
+    training <- as_tibble(read.csv(file = "data/training.csv"))
+  }
+  if(!dir.exists("data")) dir.create("data")
+  if(!file.exists("data/testinging.csv")) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "data/testing.csv")
+  }
 ```
-
-Looking at the data it seems like a lot of the rows have NAs.  Let's see how they are distributed.
+## Explore Data
+Attemp to reduce the dimensionality.  Looking at the data it seems like a lot of the rows have NAs.  Let's see how they are distributed.
 ```{r}
 percentNa <- function(x){ sum(is.na(x))/length(x)}
 table(apply(training, 2, percentNa))
 ```
-Let's just drop the columns that are mostly NAs, and do a 10 fold cross validation on a random forest.
+Let's just drop the columns that are mostly NAs.
 
 ```{r}
 training[, c(apply(training,2,percentNa)< 0.5)] -> reducedtraining
 ```
-Still too many features, could not get analysis to complete.  Maybe I can try and reduce the dimensionality a little more, and look at some of the subsets.  There are groups of data named belt, arm, forearm, dumbell.  Lets see if any of those are interesting.
+## More Exploration
+Tried to do a random forest on the entire set, but could not get analysis to complete.  Even after parallalizing the datat.  Maybe I can try and reduce the dimensionality a little more, and look at some of the subsets.  There are groups of data named belt, arm, forearm, dumbell.  Lets see if any of those are interesting.
 ```{r}
 reducedtraining %>% select(contains("_belt")) %>% select_if(is.numeric) %>% mutate(classe = reducedtraining$classe) -> beltdata
 reducedtraining %>% select(contains("_arm")) %>% select_if(is.numeric) %>% mutate(classe = reducedtraining$classe) -> armdata
 reducedtraining %>% select(contains("_fore")) %>% select_if(is.numeric) %>% mutate(classe = reducedtraining$classe) -> forearmdata
 reducedtraining %>% select(contains("_dumb")) %>% select_if(is.numeric) %>% mutate(classe = reducedtraining$classe) -> dumbbelldata
 ```
-We now have 4 sets of data with around 20 features each.
+We now have 4 sets of data with 13 features each.
 ```{r}
-#featurePlot(armdata[,-14], armdata$classe, plot = "pairs")
-#featurePlot(beltdata[,-14], beltdata$classe, plot = "pairs")
-#featurePlot(dumbbelldata[,-14], dumbbelldata$classe, plot = "pairs")
-#featurePlot(forearmdata[,-14], forearmdata$classe, plot = "pairs")
+featurePlot(armdata[,-14], armdata$classe, plot = "pairs", do.return = TRUE, main = "Arm data Feature Plot")
+featurePlot(beltdata[,-14], beltdata$classe, plot = "pairs", main = "Belt data Feature Plot")
+featurePlot(dumbbelldata[,-14], dumbbelldata$classe, plot = "pairs", main = "Dumbbell data Feature Plot")
+featurePlot(forearmdata[,-14], forearmdata$classe, plot = "pairs", main = "Forearm data Feature Plot")
 ```
-Armdata(1,2,8,11,12,13) look like they have some separation.
-Beltdata(7,12) look like they have some separation.
-Dumbbelldata(4-8,10-13) have separation.
-Forearmdata(2,4-8) have separation
-
+Selected features that have some separation between the "classe". 
 ```{r}
-
 interesting_features <- c("roll_arm","pitch_arm","accel_arm_x","magnet_arm_x", "magnet_arm_y", "magnet_arm_z", "gyros_belt_z","magnet_belt_y","total_accel_dumbbell","gyros_dumbbell_x", "gyros_dumbbell_y", "gyros_dumbbell_z","accel_dumbbell_x","accel_dumbbell_z","magnet_dumbbell_x","magnet_dumbbell_y", "magnet_dumbbell_z", "pitch_forearm", "total_accel_forearm", "gyros_forearm_x", "gyros_forearm_y", "gyros_forearm_z" )
 ```
-
+## Process Data
 ```{r}
 #Make parrallel
 library(parallel)
@@ -62,13 +77,8 @@ registerDoParallel(cluster)
 
 
 # define training control
-#train_control<- trainControl(method="cv", number = 3, allowParallel = TRUE, seeds = list(c(1:3),c(4:6),c(7:9),10 ))  #.9798 accuracy
-train_control<- trainControl(method="cv", number = 5, allowParallel = TRUE, seeds = list(c(1:3),c(4:6),c(7:9), c(10:12), c(13:15), 16 ))
-features = paste(interesting_features, collapse = "+")
+train_control<- trainControl(method="cv", number = 10, allowParallel = TRUE, seeds = list(c(1:3),c(4:6),c(7:9), c(10:12), c(13:15), c(101:103),c(104:106),c(107:109), c(110:112), c(13:15),16 ))
 training %>% select(one_of(interesting_features)) %>% mutate (classe = training$classe) -> smallSet
-#set.seed(42)
-#inTrain <- createDataPartition(y=smallSet$classe, times=1, p=0.1, list=FALSE)
-#smalltrain <- reducedtraining[inTrain,]
 model<- train(classe ~ ., data=smallSet,  method="rf", trControl = train_control)
 
 #Stop parallel processing
@@ -77,15 +87,8 @@ registerDoSEQ()
 
 print(model)
 ```
+## Predict
+Apply the model to the training set.
 ```{r}
-print nearZeroVar table
-nearZeroVar(training,saveMetrics=TRUE)
+predict(model, testing)
 ```
-
-
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
-
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
-
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
-
